@@ -46,7 +46,7 @@
 <body>
 <header>
   <h1>Localizator anunțuri imobiliare</h1>
-  <p>Găsește casa reală după poze și date, nu după pinul din anunț.</p>
+  <p>Găsește casa reală după poze și date, nu după pinul din anunț. <span class="pill">v3</span></p>
 </header>
 <main>
 
@@ -164,10 +164,11 @@ async function claude(content, maxTokens=1500){
     const body=JSON.stringify({model:$('model').value.trim(),max_tokens:maxTokens,messages:[{role:'user',content}]});
     const base={'anthropic-version':'2023-06-01','content-type':'application/json','anthropic-dangerous-direct-browser-access':'true'};
     const send=auth=>fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{...base,...auth},body});
-    let r = await send(authMode==='x' ? {'x-api-key':key} : {'authorization':'Bearer '+key});
+    let r; try{ r = await send(authMode==='x' ? {'x-api-key':key} : {'authorization':'Bearer '+key});
+    }catch(e){ throw new Error('Rețea/CORS ['+authMode+']: '+e.message); }
     if (r.status===401){ authMode = authMode==='x' ? 'bearer' : 'x'; r = await send(authMode==='x' ? {'x-api-key':key} : {'authorization':'Bearer '+key}); }
     if (r.status===429 || r.status>=500){ await new Promise(s=>setTimeout(s,3000*(attempt+1))); continue; }
-    if(!r.ok) throw new Error('API '+r.status+': '+(await r.text()).slice(0,300));
+    if(!r.ok) throw new Error('API '+r.status+' ['+authMode+']: '+(await r.text()).slice(0,300));
     const j = await r.json(); return j.content.map(c=>c.text||'').join('');
   }
   throw new Error('API indisponibil după 3 încercări');
