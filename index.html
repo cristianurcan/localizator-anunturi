@@ -53,7 +53,7 @@
 <section>
   <h2><span class="n">0</span>Setări</h2>
   <div class="row">
-    <div><label>Cheie API Anthropic</label><input id="key" type="password" placeholder="sk-ant-..."></div>
+    <div><label>Cheie API Anthropic</label><input id="key" type="password" placeholder="sk-ant-..." autocomplete="off" autocapitalize="off" spellcheck="false"><div id="keyInfo" class="hint"></div></div>
     <div><label>Model</label><input id="model" type="text" value="claude-sonnet-5-5"></div>
   </div>
   <p class="hint">Cheia rămâne doar în acest browser. Imaginile din satelit vin de la Esri World Imagery, iar clădirile din OpenStreetMap (fără alte chei).</p>
@@ -126,7 +126,9 @@ const $ = id => document.getElementById(id);
 const store = { get(k){try{return localStorage.getItem(k)}catch(e){return null}}, set(k,v){try{localStorage.setItem(k,v)}catch(e){}} };
 $('key').value = store.get('loc_key') || '';
 $('model').value = store.get('loc_model') || $('model').value;
-$('key').onchange = () => store.set('loc_key', $('key').value.trim());
+setTimeout(()=>$('key').oninput(),0);
+$('key').oninput = () => { const k=$('key').value.replace(/[\s"'“”‘’]/g,''); store.set('loc_key', k);
+  $('keyInfo').textContent = k ? `Cheie: ${k.slice(0,10)}…${k.slice(-4)} (${k.length} caractere)` : ''; };
 $('model').onchange = () => store.set('loc_model', $('model').value.trim());
 
 let photos = [];      // [{b64, dataUrl}]
@@ -155,7 +157,8 @@ const imgBlock = p => p.b64 ? {type:'image',source:{type:'base64',media_type:'im
 
 // ---------- Claude ----------
 async function claude(content, maxTokens=1500){
-  const key = $('key').value.trim(); if(!key) throw new Error('Lipsește cheia API Anthropic (pasul 0).');
+  const key = $('key').value.replace(/[\s"'“”‘’]/g,''); if(!key) throw new Error('Lipsește cheia API Anthropic (pasul 0).');
+  if(!key.startsWith('sk-ant-')) throw new Error('Cheia nu începe cu „sk-ant-” — nu pare o cheie API Anthropic.');
   for (let attempt=0; attempt<3; attempt++){
     const r = await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{
       'x-api-key':key,'anthropic-version':'2023-06-01','content-type':'application/json','anthropic-dangerous-direct-browser-access':'true'},
