@@ -46,7 +46,7 @@
 <body>
 <header>
   <h1>Localizator anunțuri imobiliare</h1>
-  <p>Găsește casa reală după poze și date, nu după pinul din anunț. <span class="pill">v3</span></p>
+  <p>Găsește casa reală după poze și date, nu după pinul din anunț. <span class="pill">v4</span></p>
 </header>
 <main>
 
@@ -169,11 +169,21 @@ async function claude(content, maxTokens=1500){
     if (r.status===401){ authMode = authMode==='x' ? 'bearer' : 'x'; r = await send(authMode==='x' ? {'x-api-key':key} : {'authorization':'Bearer '+key}); }
     if (r.status===429 || r.status>=500){ await new Promise(s=>setTimeout(s,3000*(attempt+1))); continue; }
     if(!r.ok) throw new Error('API '+r.status+' ['+authMode+']: '+(await r.text()).slice(0,300));
-    const j = await r.json(); return j.content.map(c=>c.text||'').join('');
+    const j = await r.json(); const t=j.content.map(c=>c.text||'').join(''); if(j.stop_reason==='max_tokens') log('Răspuns tăiat (max_tokens) — încerc să-l citesc oricum.',true); return t;
   }
   throw new Error('API indisponibil după 3 încercări');
 }
-function parseJson(t){ const a=t.indexOf('{'), b=t.lastIndexOf('}'); return JSON.parse(t.slice(a,b+1)); }
+function parseJson(t){
+  const a=t.indexOf('{'); if(a<0) throw new Error('Răspuns fără JSON: '+t.slice(0,200));
+  let s=t.slice(a, t.lastIndexOf('}')+1);
+  try{ return JSON.parse(s); }catch(e){}
+  // reparare: închide șiruri/obiecte rămase deschise
+  s=t.slice(a); let st=[], inStr=false, esc=false, out='';
+  for(const ch of s){ out+=ch; if(inStr){ if(esc) esc=false; else if(ch==='\\') esc=true; else if(ch==='"') inStr=false; continue; }
+    if(ch==='"') inStr=true; else if(ch==='{'||ch==='[') st.push(ch==='{'?'}':']'); else if(ch==='}'||ch===']') st.pop(); }
+  if(inStr) out+='"'; out=out.replace(/[,:\s]+$/,''); while(st.length) out+=st.pop();
+  try{ return JSON.parse(out); }catch(e){ throw new Error('JSON invalid: '+e.message+' — început răspuns: '+t.slice(0,150)); }
+}
 
 // ---------- step 1: analysis ----------
 const ANALYZE = `You are helping an architect locate the REAL property from a real-estate listing whose map pin is deliberately wrong. Below are screenshots/photos from the listing and possibly its text.
@@ -200,7 +210,7 @@ $('btnAnalyze').onclick = async () => {
   const b=$('btnAnalyze'); b.disabled=true; b.textContent='Analizez…';
   try{
     const content=[...photos.map(imgBlock),{type:'text',text:ANALYZE+'\n\nListing text:\n'+($('desc').value||'(none)')}];
-    clues = parseJson(await claude(content,2500));
+    clues = parseJson(await claude(content,6000));
     showClues();
   }catch(e){ log(e.message,true); }
   b.disabled=false; b.textContent='Analizează din nou';
@@ -307,7 +317,7 @@ async function verify(cands){
     g.forEach((c,i)=>c.img=imgs[i]);
     const content=[...photos.map(imgBlock),{type:'text',text:compareText(g.length)}];
     imgs.forEach((im,i)=>{ content.push({type:'text',text:'C'+(i+1)+':'}); content.push(imgBlock(im)); });
-    try{ const res=parseJson(await claude(content,1200)).results||[];
+    try{ const res=parseJson(await claude(content,2500)).results||[];
       res.forEach(r=>{ const k=parseInt(String(r.id).replace(/\D/g,''))-1; if(g[k]){ g[k].score=+r.score||0; g[k].reason=r.reason_ro; } });
     }catch(e){ log('Lot eșuat: '+e.message,true); }
     done+=g.length; prog(done/cands.length*0.5+0.5); log(`Verificați vizual: ${done}/${cands.length}`);
@@ -325,7 +335,7 @@ The LAST image is a satellite tile, north up, about ${Math.round(cell*1.15)} m w
 Return ONLY JSON: {"candidates":[{"x":0.0-1.0,"y":0.0-1.0,"score":0-10,"reason_ro":"short Romanian reason"}]} — x from left, y from top. At most 2 candidates, only score >= 5. Empty list if nothing fits.`;
   await pool(cells,3,async c=>{
     const im=await satImage(c.lat,c.lon,cell*1.15,640,false);
-    try{ const r=parseJson(await claude([...photos.map(imgBlock),{type:'text',text:prompt},imgBlock(im)],600)).candidates||[];
+    try{ const r=parseJson(await claude([...photos.map(imgBlock),{type:'text',text:prompt},imgBlock(im)],1200)).candidates||[];
       const w=cell*1.15;
       r.forEach(k=>{ const lat=c.lat+(0.5-k.y)*w/110570, lon=c.lon+(k.x-0.5)*w/(111320*Math.cos(c.lat*Math.PI/180));
         found.push({lat,lon,src:'grilă',pre:k.score,reason:k.reason_ro,info:'detectat la scanare'}); });
