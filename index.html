@@ -46,7 +46,7 @@
 <body>
 <header>
   <h1>Localizator anunțuri imobiliare</h1>
-  <p>Găsește casa reală după poze și date, nu după pinul din anunț. <span class="pill">v4</span></p>
+  <p>Găsește casa reală după poze și date, nu după pinul din anunț. <span class="pill">v5</span></p>
 </header>
 <main>
 
@@ -254,10 +254,32 @@ function satUrl(lat,lon,meters,px){
   const x=R*lon*Math.PI/180, y=R*Math.log(Math.tan(Math.PI/4+lat*Math.PI/360)), h=meters/2/Math.cos(lat*Math.PI/180);
   return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=${x-h},${y-h},${x+h},${y+h}&bboxSR=3857&imageSR=3857&size=${px},${px}&format=jpg&f=image`;
 }
+const tileCache=new Map();
+function getTile(z,x,y){
+  const k=z+'/'+y+'/'+x;
+  if(!tileCache.has(k)) tileCache.set(k, fetch(`https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`)
+    .then(r=>{ if(!r.ok) throw new Error('tile '+r.status); return r.blob(); }).then(b=>createImageBitmap(b))
+    .catch(e=>{ tileCache.delete(k); throw e; }));
+  return tileCache.get(k);
+}
 async function satImage(lat,lon,meters,px,cross){
-  const url=satUrl(lat,lon,meters,px);
-  try{ const r=await fetch(url); if(!r.ok) throw 0; const p=await toJpeg(await r.blob(),px,cross); p.url=url; return p; }
-  catch(e){ return {url, dataUrl:url}; }
+  const cosl=Math.cos(lat*Math.PI/180);
+  const z=Math.max(15,Math.min(19,Math.round(Math.log2(156543.03*cosl*px/meters))));
+  const W=256*Math.pow(2,z), mpp=156543.03*cosl/Math.pow(2,z);
+  const cx=(lon+180)/360*W, sl=Math.sin(lat*Math.PI/180), cy=(0.5-Math.log((1+sl)/(1-sl))/(4*Math.PI))*W;
+  const half=meters/2/mpp, x0=cx-half, y0=cy-half, size=Math.round(2*half);
+  const c=document.createElement('canvas'); c.width=size; c.height=size; const g=c.getContext('2d');
+  const jobs=[];
+  for(let tx=Math.floor(x0/256); tx<=Math.floor((x0+size)/256); tx++)
+    for(let ty=Math.floor(y0/256); ty<=Math.floor((y0+size)/256); ty++)
+      jobs.push(getTile(z,tx,ty).then(bm=>g.drawImage(bm, tx*256-x0, ty*256-y0)));
+  const res=await Promise.allSettled(jobs);
+  if(res.every(r=>r.status==='rejected')) throw new Error('Nu pot descărca imaginile din satelit ('+(res[0].reason?.message||'')+')');
+  const out=document.createElement('canvas'); out.width=out.height=px; const o=out.getContext('2d');
+  o.drawImage(c,0,0,px,px);
+  if(cross){ o.strokeStyle='#ff2a2a'; o.lineWidth=3; o.beginPath(); o.arc(px/2,px/2,px*0.09,0,7); o.stroke(); }
+  const dataUrl=out.toDataURL('image/jpeg',0.86);
+  return { dataUrl, b64: dataUrl.split(',')[1] };
 }
 async function pool(items, n, fn){ let i=0; const out=[]; const workers=Array.from({length:n},async()=>{ while(i<items.length && !stopFlag){ const k=i++; out[k]=await fn(items[k],k); } }); await Promise.all(workers); return out; }
 
@@ -313,7 +335,7 @@ async function verify(cands){
   const groups=[]; for(let i=0;i<cands.length;i+=6) groups.push(cands.slice(i,i+6));
   let done=0;
   await pool(groups,2,async g=>{
-    const imgs=await Promise.all(g.map(c=>satImage(c.lat,c.lon,110,512,true)));
+    let imgs; try{ imgs=await Promise.all(g.map(c=>satImage(c.lat,c.lon,110,512,true))); }catch(e){ log(e.message,true); done+=g.length; return; }
     g.forEach((c,i)=>c.img=imgs[i]);
     const content=[...photos.map(imgBlock),{type:'text',text:compareText(g.length)}];
     imgs.forEach((im,i)=>{ content.push({type:'text',text:'C'+(i+1)+':'}); content.push(imgBlock(im)); });
@@ -334,7 +356,7 @@ async function gridScan(){
 The LAST image is a satellite tile, north up, about ${Math.round(cell*1.15)} m wide (with slight overlap). Does it contain the listing's house? Look for the from-above signature (roof shape/colour, towers/bays, pool, terraces, plot shape, neighbours).
 Return ONLY JSON: {"candidates":[{"x":0.0-1.0,"y":0.0-1.0,"score":0-10,"reason_ro":"short Romanian reason"}]} — x from left, y from top. At most 2 candidates, only score >= 5. Empty list if nothing fits.`;
   await pool(cells,3,async c=>{
-    const im=await satImage(c.lat,c.lon,cell*1.15,640,false);
+    let im; try{ im=await satImage(c.lat,c.lon,cell*1.15,640,false); }catch(e){ log(e.message,true); done++; return; }
     try{ const r=parseJson(await claude([...photos.map(imgBlock),{type:'text',text:prompt},imgBlock(im)],1200)).candidates||[];
       const w=cell*1.15;
       r.forEach(k=>{ const lat=c.lat+(0.5-k.y)*w/110570, lon=c.lon+(k.x-0.5)*w/(111320*Math.cos(c.lat*Math.PI/180));
@@ -376,7 +398,7 @@ function render(list){
   list.forEach((c,i)=>{
     const ll=`${c.lat.toFixed(6)},${c.lon.toFixed(6)}`;
     const d=document.createElement('div'); d.className='card';
-    d.innerHTML=`<img src="${c.img?.dataUrl||satUrl(c.lat,c.lon,110,512)}" alt="">
+    d.innerHTML=`<img src="${c.img?.dataUrl||''}" alt="">
       <div class="b"><div><span class="score">#${i+1} · ${c.score}/10</span> <span class="pill">${c.src}</span> <span class="pill">${c.info||''}</span></div>
       <p style="margin:6px 0">${c.reason||''}</p>
       <div style="font:12px ui-monospace,monospace;color:var(--mute)">${ll}</div>
