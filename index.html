@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Localizator anunțuri — SQMA</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root{--bg:#f6f5f2;--card:#fff;--ink:#1d1d1b;--mute:#6b6a66;--line:#e2e0da;--acc:#1f5f5b;--warn:#a5482b}
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  header{padding:16px 18px 6px}
+  h1{font-size:19px;margin:0 0 2px}
+  header p{margin:0;color:var(--mute);font-size:13px}
+  main{max-width:980px;margin:0 auto;padding:8px 12px 60px}
+  section{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin:12px 0}
+  h2{font-size:15px;margin:0 0 10px;display:flex;gap:8px;align-items:center}
+  h2 .n{background:var(--acc);color:#fff;border-radius:50%;width:22px;height:22px;display:inline-grid;place-items:center;font-size:12px}
+  label{display:block;font-size:12px;color:var(--mute);margin:8px 0 3px}
+  input[type=text],input[type=password],input[type=number],textarea,select{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font:inherit;background:#fff}
+  textarea{min-height:90px;resize:vertical}
+  .row{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+  button{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:10px 14px;font:inherit;font-weight:600;cursor:pointer}
+  button.sec{background:#fff;color:var(--acc);border:1px solid var(--acc)}
+  button:disabled{opacity:.45;cursor:default}
+  .btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  #thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  #thumbs img{height:84px;border-radius:6px;border:1px solid var(--line)}
+  #map{height:420px;border-radius:10px;border:1px solid var(--line)}
+  .hint{font-size:12.5px;color:var(--mute);margin:6px 0 0}
+  #log{font:12px/1.4 ui-monospace,Menlo,monospace;background:#1d1d1b;color:#d9d6cf;border-radius:8px;padding:10px;max-height:180px;overflow:auto;white-space:pre-wrap;display:none}
+  .bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:8px 0}
+  .bar i{display:block;height:100%;width:0;background:var(--acc);transition:width .3s}
+  #results{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+  .card{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff}
+  .card img{width:100%;display:block;aspect-ratio:1/1;object-fit:cover}
+  .card .b{padding:10px}
+  .score{font-weight:700;color:var(--acc)}
+  .card a{color:var(--acc);font-size:13px;margin-right:10px}
+  .err{color:var(--warn)}
+  details summary{cursor:pointer;color:var(--mute);font-size:13px}
+  .pill{display:inline-block;font-size:11px;border:1px solid var(--line);border-radius:20px;padding:1px 8px;color:var(--mute)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Localizator anunțuri imobiliare</h1>
+  <p>Găsește casa reală după poze și date, nu după pinul din anunț.</p>
+</header>
+<main>
+
+<section>
+  <h2><span class="n">0</span>Setări</h2>
+  <div class="row">
+    <div><label>Cheie API Anthropic</label><input id="key" type="password" placeholder="sk-ant-..."></div>
+    <div><label>Model</label><input id="model" type="text" value="claude-sonnet-5-5"></div>
+  </div>
+  <p class="hint">Cheia rămâne doar în acest browser. Imaginile din satelit vin de la Esri World Imagery, iar clădirile din OpenStreetMap (fără alte chei).</p>
+</section>
+
+<section>
+  <h2><span class="n">1</span>Anunțul</h2>
+  <label>Screenshot-uri / poze din anunț (exterior, terase, vederi, date)</label>
+  <input id="files" type="file" accept="image/*" multiple>
+  <div id="thumbs"></div>
+  <label>Text din anunț (opțional — titlu, descriere, suprafețe)</label>
+  <textarea id="desc" placeholder="Lipește aici descrierea..."></textarea>
+  <div class="btns"><button id="btnAnalyze">Analizează anunțul</button></div>
+  <div id="analysisBox" style="display:none">
+    <div class="row">
+      <div><label>Teren (mp)</label><input id="fLand" type="number"></div>
+      <div><label>Deschidere (m)</label><input id="fFront" type="number"></div>
+      <div><label>Amprentă la sol min (mp)</label><input id="fMin" type="number"></div>
+      <div><label>Amprentă la sol max (mp)</label><input id="fMax" type="number"></div>
+      <div><label>Piscină</label><select id="fPool"><option value="0">nu / necunoscut</option><option value="1">da</option></select></div>
+    </div>
+    <label>Rezumat pentru căutare</label>
+    <div id="summary" class="hint" style="font-size:14px;color:var(--ink)"></div>
+    <details style="margin-top:8px"><summary>Toate indiciile extrase (JSON, editabil)</summary>
+      <textarea id="cluesJson" style="min-height:180px;font:12px ui-monospace,monospace"></textarea>
+    </details>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">2</span>Zona de căutare</h2>
+  <div class="row">
+    <div style="grid-column:span 2"><label>Caută cartier / zonă</label><input id="place" type="text" value="Gruia, Cluj-Napoca"></div>
+    <div style="align-self:end"><button class="sec" id="btnGo" style="width:100%">Du-mă acolo</button></div>
+  </div>
+  <p class="hint">Mută și zoom-ează harta astfel încât <b>ce se vede pe ecran</b> să fie zona de căutare. Ia cartierul întreg — nu te baza pe pinul din anunț. Maxim ~10 km².</p>
+  <div id="map" style="margin-top:8px"></div>
+  <p class="hint" id="areaInfo"></p>
+</section>
+
+<section>
+  <h2><span class="n">3</span>Caută</h2>
+  <div class="row">
+    <div><label>Metodă</label>
+      <select id="mode">
+        <option value="osm">Rapid: clădiri OpenStreetMap + verificare vizuală</option>
+        <option value="grid">Complet: scanare satelit pe grilă</option>
+        <option value="both">Ambele</option>
+      </select></div>
+    <div><label>Candidați OSM verificați vizual</label><input id="nCand" type="number" value="48"></div>
+    <div><label>Latură celulă grilă (m)</label><input id="cell" type="number" value="200"></div>
+  </div>
+  <p class="hint" id="costInfo"></p>
+  <div class="btns">
+    <button id="btnSearch">Pornește căutarea</button>
+    <button class="sec" id="btnStop" disabled>Oprește</button>
+  </div>
+  <div class="bar"><i id="prog"></i></div>
+  <div id="log"></div>
+</section>
+
+<section>
+  <h2><span class="n">4</span>Rezultate</h2>
+  <div id="results"><p class="hint">Încă nimic.</p></div>
+</section>
+
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const store = { get(k){try{return localStorage.getItem(k)}catch(e){return null}}, set(k,v){try{localStorage.setItem(k,v)}catch(e){}} };
+$('key').value = store.get('loc_key') || '';
+$('model').value = store.get('loc_model') || $('model').value;
+$('key').onchange = () => store.set('loc_key', $('key').value.trim());
+$('model').onchange = () => store.set('loc_model', $('model').value.trim());
+
+let photos = [];      // [{b64, dataUrl}]
+let clues = null;
+let stopFlag = false;
+let markers = [];
+
+function log(msg, err){ const l=$('log'); l.style.display='block'; l.textContent += (err?'⚠ ':'')+msg+'\n'; l.scrollTop=l.scrollHeight; }
+function prog(p){ $('prog').style.width = Math.round(p*100)+'%'; }
+
+// ---------- images ----------
+async function toJpeg(src, max=1400, cross){
+  const bmp = await createImageBitmap(src);
+  const s = Math.min(1, max/Math.max(bmp.width,bmp.height));
+  const c = document.createElement('canvas'); c.width=Math.round(bmp.width*s); c.height=Math.round(bmp.height*s);
+  const g = c.getContext('2d'); g.drawImage(bmp,0,0,c.width,c.height);
+  if(cross){ g.strokeStyle='#ff2a2a'; g.lineWidth=3; const r=c.width*0.09; g.beginPath(); g.arc(c.width/2,c.height/2,r,0,7); g.stroke(); }
+  const dataUrl = c.toDataURL('image/jpeg',0.86);
+  return { dataUrl, b64: dataUrl.split(',')[1] };
+}
+$('files').onchange = async e => {
+  photos = []; $('thumbs').innerHTML='';
+  for (const f of e.target.files){ const p = await toJpeg(f); photos.push(p); const im=new Image(); im.src=p.dataUrl; $('thumbs').appendChild(im); }
+};
+const imgBlock = p => p.b64 ? {type:'image',source:{type:'base64',media_type:'image/jpeg',data:p.b64}} : {type:'image',source:{type:'url',url:p.url}};
+
+// ---------- Claude ----------
+async function claude(content, maxTokens=1500){
+  const key = $('key').value.trim(); if(!key) throw new Error('Lipsește cheia API Anthropic (pasul 0).');
+  for (let attempt=0; attempt<3; attempt++){
+    const r = await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{
+      'x-api-key':key,'anthropic-version':'2023-06-01','content-type':'application/json','anthropic-dangerous-direct-browser-access':'true'},
+      body:JSON.stringify({model:$('model').value.trim(),max_tokens:maxTokens,messages:[{role:'user',content}]})});
+    if (r.status===429 || r.status>=500){ await new Promise(s=>setTimeout(s,3000*(attempt+1))); continue; }
+    if(!r.ok) throw new Error('API '+r.status+': '+(await r.text()).slice(0,300));
+    const j = await r.json(); return j.content.map(c=>c.text||'').join('');
+  }
+  throw new Error('API indisponibil după 3 încercări');
+}
+function parseJson(t){ const a=t.indexOf('{'), b=t.lastIndexOf('}'); return JSON.parse(t.slice(a,b+1)); }
+
+// ---------- step 1: analysis ----------
+const ANALYZE = `You are helping an architect locate the REAL property from a real-estate listing whose map pin is deliberately wrong. Below are screenshots/photos from the listing and possibly its text.
+Extract every clue useful for finding the house from satellite imagery and terrain. Return ONLY JSON:
+{
+ "land_area_m2": number|null, "frontage_m": number|null, "usable_area_m2": number|null,
+ "built_area_m2": number|null, "built_area_note": "is it footprint or gross floor area across levels?",
+ "levels": "e.g. S+P+1+M", "year": number|null,
+ "footprint_min_m2": number, "footprint_max_m2": number,
+ "roof": {"color":"", "shape":"", "features_from_above":""},
+ "has_pool": boolean, "pool_note": "",
+ "garage": "", "garden": "",
+ "from_above_signature": ["short list of features visible on satellite: roof shape, towers/bays, pool, terrace, awnings, tree masses, plot shape"],
+ "neighbors": ["distinctive neighbouring buildings visible in photos"],
+ "slope": "flat|gentle|steep", "view": {"has_panoramic_view": boolean, "direction_guess": "", "reasoning": ""},
+ "plot_shape_guess": "", "street_relation": "",
+ "landmarks_in_text": [], "pin_or_map_notes": "",
+ "search_summary_ro": "3-5 sentences in Romanian describing what to look for from above and where on the terrain"
+}
+Footprint range: estimate the building's ground footprint as seen from above INCLUDING attached garage and covered terraces; keep the range generous (about ±35%).`;
+
+$('btnAnalyze').onclick = async () => {
+  if(!photos.length && !$('desc').value.trim()) return alert0('Adaugă poze sau text.');
+  const b=$('btnAnalyze'); b.disabled=true; b.textContent='Analizez…';
+  try{
+    const content=[...photos.map(imgBlock),{type:'text',text:ANALYZE+'\n\nListing text:\n'+($('desc').value||'(none)')}];
+    clues = parseJson(await claude(content,2500));
+    showClues();
+  }catch(e){ log(e.message,true); }
+  b.disabled=false; b.textContent='Analizează din nou';
+};
+function showClues(){
+  $('analysisBox').style.display='block';
+  $('fLand').value=clues.land_area_m2??''; $('fFront').value=clues.frontage_m??'';
+  $('fMin').value=Math.round(clues.footprint_min_m2||80); $('fMax').value=Math.round(clues.footprint_max_m2||250);
+  $('fPool').value=clues.has_pool?'1':'0';
+  $('summary').textContent=clues.search_summary_ro||'';
+  $('cluesJson').value=JSON.stringify(clues,null,2);
+  updateCost();
+}
+function alert0(m){ log(m,true); }
+function currentClues(){ try{ clues=JSON.parse($('cluesJson').value);}catch(e){} return clues; }
+
+// ---------- step 2: map ----------
+const map = L.map('map').setView([46.7795,23.5790],15);
+const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:20,attribution:'Esri World Imagery'});
+const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'});
+sat.addTo(map); L.control.layers({'Satelit':sat,'Hartă':osm}).addTo(map);
+function bboxKm(){ const b=map.getBounds(); const lat=(b.getNorth()+b.getSouth())/2;
+  const w=(b.getEast()-b.getWest())*111.32*Math.cos(lat*Math.PI/180), h=(b.getNorth()-b.getSouth())*110.57; return {w,h,a:w*h}; }
+function updateArea(){ const k=bboxKm(); $('areaInfo').textContent=`Zonă vizibilă: ${k.w.toFixed(2)} × ${k.h.toFixed(2)} km = ${k.a.toFixed(2)} km²`+(k.a>10?' — prea mare, apropie harta.':''); updateCost(); }
+map.on('moveend',updateArea); updateArea();
+$('btnGo').onclick = async () => {
+  try{ const r=await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q='+encodeURIComponent($('place').value));
+    const j=await r.json(); if(!j[0]) return log('Zona nu a fost găsită.',true);
+    const bb=j[0].boundingbox.map(Number); map.fitBounds([[bb[0],bb[2]],[bb[1],bb[3]]]);
+  }catch(e){ log('Căutare zonă eșuată: '+e.message,true); }
+};
+
+// ---------- geometry ----------
+const R=6378137;
+function polyArea(pts){ const lat0=pts[0].lat*Math.PI/180; let s=0;
+  const xy=pts.map(p=>[p.lon*Math.PI/180*R*Math.cos(lat0), p.lat*Math.PI/180*R]);
+  for(let i=0;i<xy.length;i++){const [x1,y1]=xy[i],[x2,y2]=xy[(i+1)%xy.length]; s+=x1*y2-x2*y1;} return Math.abs(s)/2; }
+function centroid(pts){ let la=0,lo=0; pts.forEach(p=>{la+=p.lat;lo+=p.lon}); return {lat:la/pts.length,lon:lo/pts.length}; }
+function dist(a,b){ const dx=(a.lon-b.lon)*111320*Math.cos(a.lat*Math.PI/180), dy=(a.lat-b.lat)*110570; return Math.hypot(dx,dy); }
+function satUrl(lat,lon,meters,px){
+  const x=R*lon*Math.PI/180, y=R*Math.log(Math.tan(Math.PI/4+lat*Math.PI/360)), h=meters/2/Math.cos(lat*Math.PI/180);
+  return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=${x-h},${y-h},${x+h},${y+h}&bboxSR=3857&imageSR=3857&size=${px},${px}&format=jpg&f=image`;
+}
+async function satImage(lat,lon,meters,px,cross){
+  const url=satUrl(lat,lon,meters,px);
+  try{ const r=await fetch(url); if(!r.ok) throw 0; const p=await toJpeg(await r.blob(),px,cross); p.url=url; return p; }
+  catch(e){ return {url, dataUrl:url}; }
+}
+async function pool(items, n, fn){ let i=0; const out=[]; const workers=Array.from({length:n},async()=>{ while(i<items.length && !stopFlag){ const k=i++; out[k]=await fn(items[k],k); } }); await Promise.all(workers); return out; }
+
+// ---------- cost hint ----------
+function updateCost(){
+  const k=bboxKm(), cell=(+$('cell').value||200)/1000, grid=Math.ceil(k.w/cell)*Math.ceil(k.h/cell);
+  const nC=+$('nCand').value||48, mode=$('mode').value;
+  let calls=0; if(mode!=='grid') calls+=Math.ceil(nC/6); if(mode!=='osm') calls+=grid; calls+=1;
+  $('costInfo').textContent=`Estimare: ~${calls} apeluri AI${mode!=='osm'?` (grilă ${grid} celule)`:''}.`;
+}
+['mode','nCand','cell'].forEach(id=>$(id).onchange=updateCost);
+
+// ---------- step 3: search ----------
+const SKIP=new Set(['apartments','industrial','commercial','retail','garage','garages','shed','church','school','hospital','office','warehouse','roof','construction','service','kindergarten','university','public','hotel','carport','greenhouse','hut','cabin']);
+
+async function osmCandidates(){
+  const b=map.getBounds(), bb=`${b.getSouth()},${b.getWest()},${b.getNorth()},${b.getEast()}`;
+  const q=`[out:json][timeout:90];(way["building"](${bb}););out geom;nwr["leisure"="swimming_pool"](${bb});out center;`;
+  log('Descarc clădirile din OpenStreetMap…');
+  let j=null;
+  for (const ep of ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter']){
+    try{ const r=await fetch(ep,{method:'POST',body:'data='+encodeURIComponent(q),headers:{'content-type':'application/x-www-form-urlencoded'}}); if(r.ok){ j=await r.json(); break; } }catch(e){}
+  }
+  if(!j) throw new Error('Overpass nu răspunde. Încearcă metoda „grilă”.');
+  const pools=[], bld=[];
+  for(const el of j.elements){
+    if(el.tags&&el.tags.leisure==='swimming_pool'){ const c=el.center||(el.geometry?centroid(el.geometry):{lat:el.lat,lon:el.lon}); if(c&&c.lat) pools.push(c); continue; }
+    if(!el.geometry||el.geometry.length<4) continue;
+    const t=(el.tags.building||'yes'); if(SKIP.has(t)) continue;
+    bld.push({area:polyArea(el.geometry), c:centroid(el.geometry), tag:t, levels:el.tags['building:levels']});
+  }
+  log(`${bld.length} clădiri, ${pools.length} piscine cartografiate în zonă.`);
+  const mn=+$('fMin').value||80, mx=+$('fMax').value||250, mid=(mn+mx)/2, wantPool=$('fPool').value==='1';
+  let cand=bld.filter(x=>x.area>=mn&&x.area<=mx).map(x=>{
+    let s=1-Math.abs(x.area-mid)/mid;
+    if(wantPool&&pools.some(p=>dist(p,x.c)<40)) s+=0.8;
+    if(x.levels&&+x.levels>=5) s-=1;
+    return {...x,pre:s};
+  });
+  log(`${cand.length} clădiri au amprenta între ${mn} și ${mx} mp.`);
+  cand.sort((a,b)=>b.pre-a.pre);
+  return cand.slice(0, +$('nCand').value||48).map(x=>({lat:x.c.lat,lon:x.c.lon,src:'OSM',info:`amprentă ${Math.round(x.area)} mp`}));
+}
+
+function compareText(n){
+  const cl=currentClues();
+  return `The first images are from a real-estate listing (exterior photos, views, screenshots). Clues extracted: ${JSON.stringify(cl)}.
+Then come ${n} satellite crops (north up, ~110 m wide), labelled C1..C${n}. In each, the candidate building is at the exact centre (red circle when drawn).
+For each candidate rate 0-10 how likely the centre building IS the listing's house. Use: roof shape/colour and towers or bays, pool, terrace/awning, garden layout, plot proportions (land ${cl?.land_area_m2??'?'} m², frontage ${cl?.frontage_m??'?'} m), neighbouring buildings, slope and view direction. Be strict: 8+ only with several concrete matches.
+Return ONLY JSON: {"results":[{"id":"C1","score":0,"reason_ro":"short Romanian reason"}]}`;
+}
+async function verify(cands){
+  const groups=[]; for(let i=0;i<cands.length;i+=6) groups.push(cands.slice(i,i+6));
+  let done=0;
+  await pool(groups,2,async g=>{
+    const imgs=await Promise.all(g.map(c=>satImage(c.lat,c.lon,110,512,true)));
+    g.forEach((c,i)=>c.img=imgs[i]);
+    const content=[...photos.map(imgBlock),{type:'text',text:compareText(g.length)}];
+    imgs.forEach((im,i)=>{ content.push({type:'text',text:'C'+(i+1)+':'}); content.push(imgBlock(im)); });
+    try{ const res=parseJson(await claude(content,1200)).results||[];
+      res.forEach(r=>{ const k=parseInt(String(r.id).replace(/\D/g,''))-1; if(g[k]){ g[k].score=+r.score||0; g[k].reason=r.reason_ro; } });
+    }catch(e){ log('Lot eșuat: '+e.message,true); }
+    done+=g.length; prog(done/cands.length*0.5+0.5); log(`Verificați vizual: ${done}/${cands.length}`);
+  });
+}
+
+async function gridScan(){
+  const b=map.getBounds(), cell=+$('cell').value||200;
+  const lat0=(b.getNorth()+b.getSouth())/2, dLat=cell/110570, dLon=cell/(111320*Math.cos(lat0*Math.PI/180));
+  const cells=[]; for(let la=b.getSouth()+dLat/2; la<b.getNorth(); la+=dLat) for(let lo=b.getWest()+dLon/2; lo<b.getEast(); lo+=dLon) cells.push({lat:la,lon:lo});
+  log(`Scanare grilă: ${cells.length} celule de ${cell} m.`);
+  const cl=currentClues(), found=[]; let done=0;
+  const prompt=`The first images come from a real-estate listing. Clues: ${JSON.stringify(cl)}.
+The LAST image is a satellite tile, north up, about ${Math.round(cell*1.15)} m wide (with slight overlap). Does it contain the listing's house? Look for the from-above signature (roof shape/colour, towers/bays, pool, terraces, plot shape, neighbours).
+Return ONLY JSON: {"candidates":[{"x":0.0-1.0,"y":0.0-1.0,"score":0-10,"reason_ro":"short Romanian reason"}]} — x from left, y from top. At most 2 candidates, only score >= 5. Empty list if nothing fits.`;
+  await pool(cells,3,async c=>{
+    const im=await satImage(c.lat,c.lon,cell*1.15,640,false);
+    try{ const r=parseJson(await claude([...photos.map(imgBlock),{type:'text',text:prompt},imgBlock(im)],600)).candidates||[];
+      const w=cell*1.15;
+      r.forEach(k=>{ const lat=c.lat+(0.5-k.y)*w/110570, lon=c.lon+(k.x-0.5)*w/(111320*Math.cos(c.lat*Math.PI/180));
+        found.push({lat,lon,src:'grilă',pre:k.score,reason:k.reason_ro,info:'detectat la scanare'}); });
+    }catch(e){ log('Celulă eșuată: '+e.message,true); }
+    done++; prog(done/cells.length*0.5); if(done%5===0) log(`Celule scanate: ${done}/${cells.length} — ${found.length} candidați`);
+  });
+  found.sort((a,b)=>b.pre-a.pre); return found.slice(0,24);
+}
+
+function dedupe(list){ const out=[]; for(const c of list){ if(!out.some(o=>dist(o,c)<20)) out.push(c); } return out; }
+
+$('btnSearch').onclick = async () => {
+  if(!photos.length) return log('Adaugă întâi pozele anunțului (pasul 1).',true);
+  if(bboxKm().a>10) return log('Zona e prea mare — apropie harta sub 10 km².',true);
+  if(!clues){ log('Fac întâi analiza anunțului…'); await $('btnAnalyze').onclick(); if(!clues) return; }
+  stopFlag=false; $('btnSearch').disabled=true; $('btnStop').disabled=false; $('log').textContent=''; prog(0);
+  markers.forEach(m=>map.removeLayer(m)); markers=[];
+  try{
+    const mode=$('mode').value; let cands=[];
+    if(mode!=='osm') cands=cands.concat(await gridScan());
+    if(mode!=='grid' && !stopFlag){ try{ cands=cands.concat(await osmCandidates()); }catch(e){ log(e.message,true); } }
+    cands=dedupe(cands);
+    if(!cands.length){ log('Niciun candidat. Lărgește intervalul de amprentă sau folosește grila.',true); }
+    else { log(`Verificare vizuală pentru ${cands.length} candidați…`); await verify(cands); }
+    cands.forEach(c=>c.score=c.score??0);
+    cands.sort((a,b)=>b.score-a.score);
+    render(cands.slice(0,8));
+    prog(1); log('Gata.');
+  }catch(e){ log(e.message,true); }
+  $('btnSearch').disabled=false; $('btnStop').disabled=true;
+};
+$('btnStop').onclick=()=>{ stopFlag=true; log('Opresc după pașii în curs…'); };
+
+// ---------- step 4: results ----------
+function render(list){
+  const box=$('results'); box.innerHTML='';
+  if(!list.length){ box.innerHTML='<p class="hint">Nimic găsit.</p>'; return; }
+  list.forEach((c,i)=>{
+    const ll=`${c.lat.toFixed(6)},${c.lon.toFixed(6)}`;
+    const d=document.createElement('div'); d.className='card';
+    d.innerHTML=`<img src="${c.img?.dataUrl||satUrl(c.lat,c.lon,110,512)}" alt="">
+      <div class="b"><div><span class="score">#${i+1} · ${c.score}/10</span> <span class="pill">${c.src}</span> <span class="pill">${c.info||''}</span></div>
+      <p style="margin:6px 0">${c.reason||''}</p>
+      <div style="font:12px ui-monospace,monospace;color:var(--mute)">${ll}</div>
+      <a href="https://www.google.com/maps/search/?api=1&query=${ll}" target="_blank">Google Maps</a>
+      <a href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${ll}" target="_blank">Street View</a>
+      <a href="https://earth.google.com/web/@${c.lat},${c.lon},400a,300d,35y,0h,45t,0r" target="_blank">Google Earth</a></div>`;
+    d.querySelector('img').onclick=()=>map.setView([c.lat,c.lon],19);
+    box.appendChild(d);
+    const m=L.marker([c.lat,c.lon]).addTo(map).bindPopup(`#${i+1} · ${c.score}/10`); markers.push(m);
+  });
+  map.setView([list[0].lat,list[0].lon],18);
+}
+</script>
+</body>
+</html>
